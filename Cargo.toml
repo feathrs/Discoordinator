@@ -1,0 +1,18 @@
+[package]
+name = "coordinator-bot"
+version = "0.1.0"
+authors = ["Skye <eLunate@users.noreply.github.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+logos = "0.11"
+lru = "0.4"
+fixed-vec-deque = "0.1"
+parking_lot = "0.10"
+
+[dependencies.serenity]
+default-features = false
+features = ["client", "gateway", "http", "model", "rustls_backend", "builder", "utils"]
+version = "0.8"
