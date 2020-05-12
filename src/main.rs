@@ -164,15 +164,20 @@ impl EventHandler for Bot {
                 if queue.is_full() {
                     let old = queue.front().unwrap();
                     // We're about to write over the last so we should check it
-
-                    let map = self.voice_counts.read();
                     // If it's empty, tidy it
-                    if let Some(0) = map.get(&old.0) {
+                    let count = self.voice_counts.read().get(&old.0)
+                        .map(|o|*o) // Thanks. I hate it.
+                        .unwrap_or(0);
+                    if count == 0 {
                         let _ = vc.delete(&ctx);
                         if let Some(ref txt) = txt {
                             let _ = txt.delete(&ctx);
                         }
                         let _ = cat.delete(&ctx);
+                        // This should work because the last use of the read lock
+                        // was above. NLL or something good like that. If not I
+                        // can manually drop(map) anyway.
+                        self.voice_counts.write().remove(&old.0);
                     }
                     // If it's not empty, it'll get cleaned later.
                 }
