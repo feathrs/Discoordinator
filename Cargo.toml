@@ -11,6 +11,8 @@ logos = "0.11"
 lru = "0.4"
 fixed-vec-deque = "0.1"
 parking_lot = "0.10"
+crossbeam = "0.7"
+delegate = "0.4"
 
 [dependencies.serenity]
 default-features = false

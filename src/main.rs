@@ -1,15 +1,21 @@
+extern crate crossbeam;
 extern crate fixed_vec_deque;
 extern crate logos;
 extern crate lru;
 extern crate parking_lot;
 extern crate serenity;
 
+use crossbeam::scope;
 use fixed_vec_deque::FixedVecDeque;
 use lru::LruCache;
 use parking_lot::{RwLock, RwLockWriteGuard};
+use serenity::http::Http;
 use serenity::model::prelude::*;
 use serenity::prelude::*;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 mod command;
 
@@ -173,12 +179,7 @@ impl EventHandler for Bot {
                     let old = queue.front().unwrap();
                     // We're about to write over the last so we should check it
                     // If it's empty, tidy it
-                    let count = self
-                        .voice_counts
-                        .read()
-                        .get(&old.0)
-                        .copied()
-                        .unwrap_or(0);
+                    let count = self.voice_counts.read().get(&old.0).copied().unwrap_or(0);
                     if count == 0 {
                         let _ = vc.delete(&ctx);
                         if let Some(ref txt) = txt {
@@ -287,6 +288,18 @@ impl EventHandler for Bot {
     }
 }
 
+struct BotEventsDelegator(Arc<Bot>);
+
+impl EventHandler for BotEventsDelegator {
+    delegate::delegate! {
+        to self.0 {
+            fn message(&self, ctx: Context, message: Message);
+            fn voice_state_update(&self, ctx: Context, guild: Option<GuildId>, voice: VoiceState);
+            fn ready(&self, ctx: Context, _ready: Ready);
+        }
+    }
+}
+
 fn main() {
     let perms_member: Permissions = Permissions::READ_MESSAGES
         | Permissions::SEND_MESSAGES
@@ -298,7 +311,7 @@ fn main() {
         | Permissions::PRIORITY_SPEAKER
         | Permissions::MENTION_EVERYONE; // Only applies to a channel.
 
-    let bot = Bot {
+    let bot = Arc::new(Bot {
         perms_member,
         perms_creator,
         cleanup_queue: RwLock::new(FixedVecDeque::new()),
@@ -307,14 +320,51 @@ fn main() {
         category_cache: RwLock::new(CategoryCache::new(32)),
         ignore_cache: RwLock::new(LruCache::new(128)),
         owner_cache: RwLock::new(LruCache::new(128)),
-    };
+    });
 
-    println!("Preparing client");
-    let mut client = Client::new(
-        dbg!(std::env::args().nth(1).expect("No token supplied")),
-        bot,
-    )
-    .expect("Failed to create client. Bad token?");
-    println!("Client prepared");
-    client.start().expect("Failed to start the bot.");
+    let mut token = std::env::args().nth(1).expect("No token supplied");
+    if !token.starts_with("Bot ") {
+        token = format!("Bot {}", token);
+    }
+    let http_client = Http::new_with_token(&token);
+    scope(move |s| {
+        println!("Preparing client");
+        let mut client = Client::new(token, BotEventsDelegator(Arc::clone(&bot)))
+            .expect("Failed to create client. Bad token?");
+        println!("Client prepared");
+
+        let guard = s.spawn(move |_| {
+            let mut last = ChannelId(0);
+            loop {
+                println!("Checking for idle channels");
+                sleep(Duration::from_secs(60));
+                let mut cleanup = bot.cleanup_queue.write();
+                let tail = cleanup.front();
+                if let Some(tail) = tail {
+                    println!("Checking {:?}", tail);
+                    if tail.0 == last {
+                        println!("Was the last checked.");
+                        let tail = cleanup.pop_front().unwrap();
+                        // It's safe, I promise. Probably.
+                        let mut counts = bot.voice_counts.write();
+                        if counts.get(&tail.1).copied().unwrap_or(0) == 0 {
+                            println!("Nobody in the channel; Cleaning up.");
+                            counts.remove(&tail.1);
+                            if let Some(txt) = tail.2 {
+                                let _ = txt.delete(&http_client);
+                            }
+                            let _ = tail.1.delete(&http_client);
+                            let _ = tail.0.delete(&http_client);
+                        }
+                    } else {
+                        println!("Setting it as the last used.");
+                        last = tail.0;
+                    }
+                }
+            }
+        });
+        client.start().expect("Failed to start the bot.");
+        guard.join().expect("Failed to join guard");
+    })
+    .expect("Failed to start crossbeam scope");
 }
