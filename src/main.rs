@@ -20,6 +20,11 @@ use std::time::Duration;
 mod command;
 
 type CategoryCache = LruCache<ChannelId, (ChannelId, Option<ChannelId>)>;
+static mut USER_ID: UserId = UserId(0);
+
+fn user_id() -> UserId {
+    unsafe {USER_ID} // I solemnly swear that I am up to no good
+}
 
 struct Bot {
     perms_member: Permissions,
@@ -101,7 +106,8 @@ impl EventHandler for Bot {
                 .args
                 .iter()
                 .filter_map(|arg| arg.parse::<UserId>().ok())
-                .chain(std::iter::once(message.author.id));
+                .chain(std::iter::once(message.author.id))
+                .chain(std::iter::once(user_id()));
             let initial_user_perms = users
                 .clone()
                 .map(|user| PermissionOverwrite {
@@ -280,7 +286,8 @@ impl EventHandler for Bot {
         }
     }
 
-    fn ready(&self, ctx: Context, _: Ready) {
+    fn ready(&self, ctx: Context, ready: Ready) {
+        unsafe {USER_ID = ready.user.id}
         //ctx.set_activity(/*activity*/);
         // Serenity doesn't support a custom activity
         // Despite this, it has the custom activity type
