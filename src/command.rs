@@ -1,7 +1,7 @@
 // Parses command-line-like argument strings.
+use logos::Logos;
 use std::collections::HashMap;
 use std::str::Chars;
-use logos::Logos;
 
 #[derive(Logos)]
 enum Tokens<'source> {
@@ -17,13 +17,13 @@ enum Tokens<'source> {
     ArgStr(&'source str),
 
     #[regex("\\-\\-[a-zA-Z]+", |lex| &lex.slice()[2..])]
-    LongFlag(&'source str)
+    LongFlag(&'source str),
 }
 
 pub struct Args<'a> {
     pub kwargs: HashMap<&'a str, &'a str>,
     pub args: Vec<&'a str>,
-    pub flags: HashMap<char, u8>
+    pub flags: HashMap<char, u8>,
 }
 
 impl<'a> Args<'a> {
@@ -38,20 +38,22 @@ impl<'a> Args<'a> {
                     for c in chars {
                         *flags.entry(c).or_insert(0) += 1;
                     }
-                },
+                }
                 Tokens::ArgStr(arg) => args.push(arg),
                 Tokens::LongFlag(flag) => {
                     if let Some(Tokens::ArgStr(arg)) = lexer.next() {
                         kwargs.insert(flag, arg);
                     } else {
-                        return Err(())
+                        return Err(());
                     }
-                },
-                _ => return Err(())
+                }
+                _ => return Err(()),
             }
         }
         Ok(Args {
-            kwargs, args, flags
+            kwargs,
+            args,
+            flags,
         })
     }
 }

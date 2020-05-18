@@ -1,15 +1,15 @@
-extern crate serenity;
+extern crate fixed_vec_deque;
 extern crate logos;
 extern crate lru;
-extern crate fixed_vec_deque;
 extern crate parking_lot;
+extern crate serenity;
 
-use serenity::prelude::*;
-use serenity::model::prelude::*;
 use fixed_vec_deque::FixedVecDeque;
-use std::collections::BTreeMap;
 use lru::LruCache;
 use parking_lot::{RwLock, RwLockWriteGuard};
+use serenity::model::prelude::*;
+use serenity::prelude::*;
+use std::collections::BTreeMap;
 
 mod command;
 
@@ -24,12 +24,16 @@ struct Bot {
     category_cache: RwLock<CategoryCache>,
     // category cache is actually vc -> category + txt
     ignore_cache: RwLock<LruCache<ChannelId, ()>>,
-    owner_cache: RwLock<LruCache<(UserId, ChannelId), ()>> 
-    // owner cache is just me being lazy about party owner checks
+    owner_cache: RwLock<LruCache<(UserId, ChannelId), ()>>, // owner cache is just me being lazy about party owner checks
 }
 
 impl Bot {
-    fn update_guild_cache(&self, ctx: &Context, guild: GuildId, cache_handle: &mut RwLockWriteGuard<CategoryCache>) {
+    fn update_guild_cache(
+        &self,
+        ctx: &Context,
+        guild: GuildId,
+        cache_handle: &mut RwLockWriteGuard<CategoryCache>,
+    ) {
         let channel_info = guild.channels(&ctx);
         if channel_info.is_err() {
             // This is a disaster!
@@ -45,7 +49,7 @@ impl Bot {
                     if info.name.starts_with("CX~") {
                         category_list.push(id);
                     }
-                },
+                }
                 ChannelType::Text | ChannelType::Voice => {
                     if let Some(cat_id) = info.category_id {
                         let mut entry = category_map.entry(cat_id).or_insert((ChannelId(0), None));
@@ -55,7 +59,7 @@ impl Bot {
                             entry.0 = id;
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -87,29 +91,31 @@ impl EventHandler for Bot {
                 format!("CX~{}", message.id)
             };
             // Set up the initial permissions
-            let users = args.args.iter()
+            let users = args
+                .args
+                .iter()
                 .filter_map(|arg| arg.parse::<UserId>().ok())
                 .chain(std::iter::once(message.author.id));
-            let initial_user_perms = users.clone()
+            let initial_user_perms = users
+                .clone()
                 .map(|user| PermissionOverwrite {
                     allow: self.perms_creator,
                     deny: Permissions::empty(),
-                    kind: PermissionOverwriteType::Member(user)
-                }).chain(
-                    std::iter::once(PermissionOverwrite {
-                        allow: Permissions::empty(),
-                        deny: self.perms_member,
-                        kind: PermissionOverwriteType::Role(RoleId(guild.0))
-                    })
-                );
-            
+                    kind: PermissionOverwriteType::Member(user),
+                })
+                .chain(std::iter::once(PermissionOverwrite {
+                    allow: Permissions::empty(),
+                    deny: self.perms_member,
+                    kind: PermissionOverwriteType::Role(RoleId(guild.0)),
+                }));
+
             // Create a category
-            let cat = guild.create_channel(&ctx, |c|c
-                .name(name)
-                .permissions(initial_user_perms.clone())
-                .kind(ChannelType::Category)
-                .position(200)
-            );
+            let cat = guild.create_channel(&ctx, |c| {
+                c.name(name)
+                    .permissions(initial_user_perms.clone())
+                    .kind(ChannelType::Category)
+                    .position(200)
+            });
             let cat = if cat.is_err() {
                 let _ = message.reply(&ctx, "Failed to create category.");
                 return;
@@ -118,13 +124,13 @@ impl EventHandler for Bot {
             };
 
             // Create the channels
-            let vc = guild.create_channel(&ctx, |c|c
-                .name(format!("CX#{}", cat.id.0))
-                .position(200)
-                //.permissions(initial_user_perms.clone())
-                .kind(ChannelType::Voice)
-                .category(cat.id)
-            );
+            let vc = guild.create_channel(&ctx, |c| {
+                c.name(format!("CX#{}", cat.id.0))
+                    .position(200)
+                    //.permissions(initial_user_perms.clone())
+                    .kind(ChannelType::Voice)
+                    .category(cat.id)
+            });
             let vc = if vc.is_err() {
                 let _ = message.reply(&ctx, "Failed to create VC.");
                 let res = cat.delete(&ctx);
@@ -138,23 +144,25 @@ impl EventHandler for Bot {
             let mut owner_cache = self.owner_cache.write();
             for user in users {
                 owner_cache.put((user, vc.id), ());
-            }    
+            }
 
-            let txt = guild.create_channel(&ctx, |c|c
-                .name(format!("cx-{}", cat.id.0))
-                .position(200)
-                .kind(ChannelType::Text)
-                //.permissions(initial_user_perms)
-                .category(cat.id)
-            ).ok();
+            let txt = guild
+                .create_channel(&ctx, |c| {
+                    c.name(format!("cx-{}", cat.id.0))
+                        .position(200)
+                        .kind(ChannelType::Text)
+                        //.permissions(initial_user_perms)
+                        .category(cat.id)
+                })
+                .ok();
             if txt.is_none() {
                 let _ = message.reply(&ctx, "Failed to create text channel. Voice only.");
             }
 
             // Add that shit to the cache.
             let mut cat_cache = self.category_cache.write();
-            cat_cache.put(vc.id, (cat.id, txt.as_ref().map(|c|c.id)));
-            
+            cat_cache.put(vc.id, (cat.id, txt.as_ref().map(|c| c.id)));
+
             // Now, if the user is in voice, we should move them.
             let moved = guild.move_member(&ctx, message.author.id, vc.id);
             // If we can't move them, schedule the channel to be checked again
@@ -165,8 +173,11 @@ impl EventHandler for Bot {
                     let old = queue.front().unwrap();
                     // We're about to write over the last so we should check it
                     // If it's empty, tidy it
-                    let count = self.voice_counts.read().get(&old.0)
-                        .map(|o|*o) // Thanks. I hate it.
+                    let count = self
+                        .voice_counts
+                        .read()
+                        .get(&old.0)
+                        .copied()
                         .unwrap_or(0);
                     if count == 0 {
                         let _ = vc.delete(&ctx);
@@ -181,10 +192,11 @@ impl EventHandler for Bot {
                     }
                     // If it's not empty, it'll get cleaned later.
                 }
-                *queue.push_back() = (cat.id, vc.id, txt.map(|c|c.id));
+                *queue.push_back() = (cat.id, vc.id, txt.map(|c| c.id));
             };
         }
     }
+
     fn voice_state_update(&self, ctx: Context, guild: Option<GuildId>, voice: VoiceState) {
         if guild.is_none() {
             return;
@@ -214,10 +226,10 @@ impl EventHandler for Bot {
                     } else {
                         eprintln!("Failed to get channels after cache reload for {:?}", guild);
                         // This could be an ignored channel
-                        // If this keeps happening, look at updating the ignore 
+                        // If this keeps happening, look at updating the ignore
                         // cache at the same time. If it keeps happening then,
                         // look at dynamically scaling the cache when it happens.
-                        
+
                         // This is a hack.
                         println!("Ignoring {:?}", old_channel);
                         let mut ignore_cache = self.ignore_cache.write();
@@ -227,7 +239,10 @@ impl EventHandler for Bot {
             } else {
                 // We didn't actually have information on the channel.
                 // It's game over really. There's nothing to be done here.
-                eprintln!("A user disconnected from an uncached channel in {} ({})", guild, old_channel);
+                eprintln!(
+                    "A user disconnected from an uncached channel in {} ({})",
+                    guild, old_channel
+                );
             }
         }
         if let Some(chan) = voice.channel_id {
@@ -245,31 +260,35 @@ impl EventHandler for Bot {
                 // The user is an owner of this channel. They already have perms
                 return;
             }
-            
+
             // If we're tracking it, we should make sure they have permissions.
             let mut cat_cache = self.category_cache.write();
             if let Some((cat_id, _)) = cat_cache.get(&chan) {
-                let res = cat_id.create_permission(&ctx, &PermissionOverwrite {
-                    allow: self.perms_member,
-                    deny: Permissions::empty(),
-                    kind: PermissionOverwriteType::Member(voice.user_id)
-                });
+                let res = cat_id.create_permission(
+                    &ctx,
+                    &PermissionOverwrite {
+                        allow: self.perms_member,
+                        deny: Permissions::empty(),
+                        kind: PermissionOverwriteType::Member(voice.user_id),
+                    },
+                );
                 if res.is_err() {
                     eprintln!("Failed to set category perms; {:?}", res);
                 }
             }
         }
     }
+
     fn ready(&self, ctx: Context, _: Ready) {
         //ctx.set_activity(/*activity*/);
         // Serenity doesn't support a custom activity
-        // Despite this, it has the custom activity type 
+        // Despite this, it has the custom activity type
         // This is fucking stupid.
     }
 }
 
-fn main() { 
-    let perms_member: Permissions = Permissions::READ_MESSAGES 
+fn main() {
+    let perms_member: Permissions = Permissions::READ_MESSAGES
         | Permissions::SEND_MESSAGES
         | Permissions::CONNECT
         | Permissions::SPEAK
@@ -280,22 +299,22 @@ fn main() {
         | Permissions::MENTION_EVERYONE; // Only applies to a channel.
 
     let bot = Bot {
-        perms_member, perms_creator,
+        perms_member,
+        perms_creator,
         cleanup_queue: RwLock::new(FixedVecDeque::new()),
         voice_counts: RwLock::new(BTreeMap::new()),
-        voice_channels: RwLock::new(BTreeMap::new()), 
-        category_cache: RwLock::new(CategoryCache::new(32)), 
-        ignore_cache: RwLock::new(LruCache::new(128)), 
-        owner_cache: RwLock::new(LruCache::new(128))
+        voice_channels: RwLock::new(BTreeMap::new()),
+        category_cache: RwLock::new(CategoryCache::new(32)),
+        ignore_cache: RwLock::new(LruCache::new(128)),
+        owner_cache: RwLock::new(LruCache::new(128)),
     };
-
 
     println!("Preparing client");
     let mut client = Client::new(
-        dbg!(std::env::args().skip(1).next().expect("No token supplied")), 
-        bot
-    ).expect("Failed to create client. Bad token?");
+        dbg!(std::env::args().nth(1).expect("No token supplied")),
+        bot,
+    )
+    .expect("Failed to create client. Bad token?");
     println!("Client prepared");
-    client.start()
-        .expect("Failed to start the bot.");
+    client.start().expect("Failed to start the bot.");
 }
