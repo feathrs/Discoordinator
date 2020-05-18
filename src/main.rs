@@ -260,6 +260,12 @@ impl EventHandler for Bot {
             }
         }
     }
+    fn ready(&self, ctx: Context, _: Ready) {
+        //ctx.set_activity(/*activity*/);
+        // Serenity doesn't support a custom activity
+        // Despite this, it has the custom activity type 
+        // This is fucking stupid.
+    }
 }
 
 fn main() { 
