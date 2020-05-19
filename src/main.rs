@@ -1,6 +1,6 @@
 extern crate crossbeam;
 extern crate fixed_vec_deque;
-extern crate logos;
+extern crate cmd_rs;
 extern crate lru;
 extern crate parking_lot;
 extern crate serenity;
@@ -16,8 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
-
-mod command;
+use cmd::Args;
 
 type CategoryCache = LruCache<ChannelId, (ChannelId, Option<ChannelId>)>;
 static mut USER_ID: UserId = UserId(0);
@@ -90,7 +89,7 @@ impl EventHandler for Bot {
         }
         let guild = message.guild_id.unwrap();
         if message.content.starts_with("/party") {
-            let args = command::Args::parse(&message.content[6..]);
+            let args = Args::parse(&message.content[6..]);
             if args.is_err() {
                 let _ = message.reply(ctx, "Failed to parse command!");
                 return;
