@@ -1,6 +1,6 @@
 extern crate crossbeam;
 extern crate fixed_vec_deque;
-extern crate cmd_rs;
+extern crate cmd;
 extern crate lru;
 extern crate parking_lot;
 extern crate serenity;
