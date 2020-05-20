@@ -12,7 +12,7 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use serenity::http::Http;
 use serenity::model::prelude::*;
 use serenity::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -139,7 +139,7 @@ impl EventHandler for Bot {
 
             // Create the channels
             let vc = guild.create_channel(&ctx, |c| {
-                c.name(format!("CX#{}", cat.id.0))
+                c.name(format!("Party {}", cat.id.0))
                     .position(200)
                     //.permissions(initial_user_perms.clone())
                     .kind(ChannelType::Voice)
@@ -162,7 +162,7 @@ impl EventHandler for Bot {
 
             let txt = guild
                 .create_channel(&ctx, |c| {
-                    c.name(format!("cx-{}", cat.id.0))
+                    c.name(format!("party-{}", cat.id.0))
                         .position(200)
                         .kind(ChannelType::Text)
                         //.permissions(initial_user_perms)
@@ -289,7 +289,74 @@ impl EventHandler for Bot {
     }
 
     fn ready(&self, ctx: Context, ready: Ready) {
-        unsafe {USER_ID = ready.user.id}
+        let guilds = ready.guilds.iter().filter_map(|status| 
+            if let GuildStatus::OnlineGuild(guild) = status {Some(guild)} else {None}
+        );
+        let mut category_cache = self.category_cache.write();
+        let mut voice_map = self.voice_channels.write(); // User channel tracker (for decrement)
+        let mut counts = self.voice_counts.write(); // User channel counts
+        for guild in guilds {
+            // This code is copy-pasted
+            // Please refactor.
+            let mut category_map = HashMap::new();
+            let mut category_list = Vec::new();
+            for (&id, info) in &guild.channels {
+                let info = info.read();
+                match info.kind {
+                    ChannelType::Category => {
+                        if info.name.starts_with(PARTY_PREFIX) {
+                            category_list.push(id);
+                        }
+                    }
+                    ChannelType::Text | ChannelType::Voice => {
+                        if let Some(cat_id) = info.category_id {
+                            let mut entry = category_map.entry(cat_id).or_insert((ChannelId(0), None));
+                            if info.kind == ChannelType::Text {
+                                entry.1 = Some(id);
+                            } else {
+                                entry.0 = id;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for cat_id in category_list {
+                if let Some((vc_id, txt_id)) = category_map.remove(&cat_id) {
+                    category_cache.put(vc_id, (cat_id, txt_id));
+                }
+            }
+            
+            // Populate the ignore cache with every channel not matched to a party
+            let mut ignore = self.ignore_cache.write();
+            for (_, (vc_id, _)) in category_map.drain() { 
+                ignore.put(vc_id, ()); // I really need some kind of LRU set
+            }
+
+            for (&user, voice) in &guild.voice_states {
+                *counts.entry(voice.channel_id.expect("User voice not in channel at ready")).or_insert(0) += 1;
+                voice_map.insert(user, voice.channel_id.unwrap());
+            }
+        }
+
+        for (&chan, &v) in counts.clone().iter() {
+            println!("{}, {}", chan, v);
+            let cat_info = category_cache.peek(&chan);
+            if let Some(info) = cat_info {
+                if v == 0 {
+                    // Delete it
+                    // category_cache is an LRU cache so removal will happen automatically
+                    counts.remove(&chan);
+                    let _ = chan.delete(&ctx);
+                    if let Some(txt) = info.1 {
+                        let _ = txt.delete(&ctx);
+                    }
+                    let _ = info.0.delete(&ctx);
+                }
+            }
+        }
+
+        unsafe {USER_ID = ready.user.id};
         //ctx.set_activity(/*activity*/);
         // Serenity doesn't support a custom activity
         // Despite this, it has the custom activity type
