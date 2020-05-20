@@ -19,6 +19,9 @@ use std::time::Duration;
 use cmd::Args;
 
 type CategoryCache = LruCache<ChannelId, (ChannelId, Option<ChannelId>)>;
+
+const PARTY_PREFIX: &str = "+# ";
+
 static mut USER_ID: UserId = UserId(0);
 
 fn user_id() -> UserId {
@@ -56,7 +59,7 @@ impl Bot {
         for (id, info) in channel_info {
             match info.kind {
                 ChannelType::Category => {
-                    if info.name.starts_with("CX~") {
+                    if info.name.starts_with(PARTY_PREFIX) {
                         category_list.push(id);
                     }
                 }
@@ -96,9 +99,9 @@ impl EventHandler for Bot {
             }
             let args = args.unwrap();
             let name = if let Some(name) = args.kwargs.get("name") {
-                format!("CX~{}", name)
+                format!("{}{}", PARTY_PREFIX, name)
             } else {
-                format!("CX~{}", message.id)
+                format!("{}{}", PARTY_PREFIX, message.id)
             };
             // Set up the initial permissions
             let users = args
