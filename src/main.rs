@@ -99,7 +99,7 @@ impl EventHandler for Bot {
             }
             let args = args.unwrap();
             let name = if let Some(name) = args.kwargs.get("name") {
-                format!("{}{}", PARTY_PREFIX, name)
+                format!("{}{}", PARTY_PREFIX, &name[..std::cmp::min(20, name.len())])
             } else {
                 format!("{}{}", PARTY_PREFIX, message.id)
             };
