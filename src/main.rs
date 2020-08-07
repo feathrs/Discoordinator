@@ -19,6 +19,7 @@ use std::time::Duration;
 use cmd::Args;
 
 type CategoryCache = LruCache<ChannelId, (ChannelId, Option<ChannelId>)>;
+type CleanupQueue = FixedVecDeque<[(ChannelId, ChannelId, Option<ChannelId>); 32]>;
 
 const PARTY_PREFIX: &str = "+# ";
 
@@ -31,7 +32,7 @@ fn user_id() -> UserId {
 struct Bot {
     perms_member: Permissions,
     perms_creator: Permissions,
-    cleanup_queue: RwLock<FixedVecDeque<[(ChannelId, ChannelId, Option<ChannelId>); 32]>>,
+    cleanup_queue: RwLock<CleanupQueue>,
     voice_counts: RwLock<BTreeMap<ChannelId, u8>>,
     voice_channels: RwLock<BTreeMap<UserId, ChannelId>>,
     category_cache: RwLock<CategoryCache>,
