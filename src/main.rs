@@ -41,6 +41,7 @@ struct Bot {
     owner_cache: RwLock<LruCache<(UserId, ChannelId), ()>>, // owner cache is just me being lazy about party owner checks
     role_cache: RwLock<BTreeSet<RoleId>>, // to identify if user has perms to move user
     // god forbid should two servers have two roles with identical ids
+    guild_owner_cache: RwLock<BTreeMap<GuildId, UserId>>, // Owner always has Administrator perms
 }
 
 impl Bot {
@@ -225,8 +226,9 @@ impl EventHandler for Bot {
                 // If we moved them just fine, check if we should move everyone else they've added
                 // The users iterator includes the owner but this should be a fine no-op.
                 let role_cache = self.role_cache.read();
-                if message.member.unwrap().roles.iter().any(|r| role_cache.contains(r)) {
-                    for user in users.clone() {
+                if message.member.unwrap().roles.iter().any(|r| role_cache.contains(r))
+                    || self.guild_owner_cache.read().get(&guild) == Some(&message.author.id)
+                {
                         // Dump the result, we don't actually care if they succeeded.
                         let _ = guild.move_member(&ctx, user, vc.id);
                     }
@@ -327,11 +329,15 @@ impl EventHandler for Bot {
         let mut voice_map = self.voice_channels.write(); // User channel tracker (for decrement)
         let mut counts = self.voice_counts.write(); // User channel counts
         let mut role_cache = self.role_cache.write();
+        let mut guild_owner_cache = self.guild_owner_cache.write();
         for guild in guilds {
             // Update the role cache
             for (.., role) in &guild.roles {
                 Self::update_role_raw(&mut role_cache, role);
             }
+
+            // Update guild-owner cache
+            guild_owner_cache.insert(guild.id, guild.owner_id);
 
             // This code is copy-pasted
             // Please refactor.
@@ -419,6 +425,7 @@ impl EventHandler for Bot {
         for (.., role) in guild.roles {
             Self::update_role_raw(&mut role_cache, &role);
         }
+        self.guild_owner_cache.write().insert(guild.id, guild.owner_id);
     }
 }
 
@@ -459,6 +466,7 @@ fn main() {
         ignore_cache: RwLock::new(LruCache::new(128)),
         owner_cache: RwLock::new(LruCache::new(128)),
         role_cache: RwLock::new(BTreeSet::new()),
+        guild_owner_cache: RwLock::new(BTreeMap::new())
     });
 
     let mut token = std::env::args().nth(1).expect("No token supplied");
