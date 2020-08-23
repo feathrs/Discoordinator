@@ -115,7 +115,7 @@ impl EventHandler for Bot {
             let args = args.unwrap();
             let name = if let Some(name) = args.kwargs.get("name") {
                 format!("{}{}", PARTY_PREFIX, &name[..std::cmp::min(20, name.len())])
-            } else if let Some(name) = args.args.get(1) {
+            } else if let Some(name) = args.args.get(0) {
                 if name.parse::<UserId>().is_ok() {
                     // It's actually a user, so just give it a default name
                     format!("{}{}", PARTY_PREFIX, message.id)
