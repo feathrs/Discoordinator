@@ -91,7 +91,7 @@ impl Bot {
     }
 
     fn update_role_raw(role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, role: &Role) {
-        if role.permissions.move_members() {
+        if role.permissions.move_members() || role.permissions.administrator() {
             role_cache.insert(role.id);
         } else {
             role_cache.remove(&role.id);
@@ -401,7 +401,7 @@ impl EventHandler for Bot {
     }
 
     fn guild_role_create(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
-        if role.permissions.move_members() {
+        if role.permissions.move_members() || role.permissions.administrator() {
             self.role_cache.write().insert(role.id);
         }
     }
