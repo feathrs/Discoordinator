@@ -128,10 +128,11 @@ impl EventHandler for Bot {
                 format!("{}{}", PARTY_PREFIX, message.id)
             };
             // Set up the initial permissions
-            let users = args
+            let listed_users = args
                 .args
                 .iter()
-                .filter_map(|arg| arg.parse::<UserId>().ok())
+                .filter_map(|arg| arg.parse::<UserId>().ok());
+            let users = listed_users.clone()
                 .chain(std::iter::once(message.author.id))
                 .chain(std::iter::once(user_id()));
             let initial_user_perms = users
@@ -229,6 +230,7 @@ impl EventHandler for Bot {
                 if message.member.unwrap().roles.iter().any(|r| role_cache.contains(r))
                     || self.guild_owner_cache.read().get(&guild) == Some(&message.author.id)
                 {
+                    for user in listed_users.clone() {
                         // Dump the result, we don't actually care if they succeeded.
                         let _ = guild.move_member(&ctx, user, vc.id);
                     }
