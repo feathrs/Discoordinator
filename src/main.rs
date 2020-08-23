@@ -153,11 +153,9 @@ impl EventHandler for Bot {
                     .kind(ChannelType::Category)
                     .position(200)
             });
-            let cat = if cat.is_err() {
+            let cat = if let Ok(cat) = cat {cat} else {
                 let _ = message.reply(&ctx, "Failed to create category.");
                 return;
-            } else {
-                cat.unwrap()
             };
 
             // Create the channels
@@ -168,15 +166,13 @@ impl EventHandler for Bot {
                     .kind(ChannelType::Voice)
                     .category(cat.id)
             });
-            let vc = if vc.is_err() {
+            let vc = if let Ok(vc) = vc {vc} else {
                 let _ = message.reply(&ctx, "Failed to create VC.");
                 let res = cat.delete(&ctx);
                 if res.is_err() {
                     let _ = message.reply(&ctx, "Also failed to delete the category. Disaster.");
                 }
                 return;
-            } else {
-                vc.unwrap()
             };
             let mut owner_cache = self.owner_cache.write();
             for user in users.clone() {
