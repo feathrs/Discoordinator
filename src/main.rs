@@ -12,7 +12,7 @@ use parking_lot::{RwLock, RwLockWriteGuard};
 use serenity::http::Http;
 use serenity::model::prelude::*;
 use serenity::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, BTreeSet};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -39,6 +39,8 @@ struct Bot {
     // category cache is actually vc -> category + txt
     ignore_cache: RwLock<LruCache<ChannelId, ()>>,
     owner_cache: RwLock<LruCache<(UserId, ChannelId), ()>>, // owner cache is just me being lazy about party owner checks
+    role_cache: RwLock<BTreeSet<RoleId>>, // to identify if user has perms to move user
+    // god forbid should two servers have two roles with identical ids
 }
 
 impl Bot {
@@ -81,6 +83,18 @@ impl Bot {
             if let Some((vc_id, txt_id)) = category_map.remove(&cat_id) {
                 cache_handle.put(vc_id, (cat_id, txt_id));
             }
+        }
+    }
+
+    fn update_role(&self, role: Role) {
+        Self::update_role_raw(&mut self.role_cache.write(), role);
+    }
+
+    fn update_role_raw(role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, role: Role) {
+        if role.permissions.move_members() {
+            role_cache.insert(role.id);
+        } else {
+            role_cache.remove(&role.id);
         }
     }
 }
@@ -165,7 +179,7 @@ impl EventHandler for Bot {
                 vc.unwrap()
             };
             let mut owner_cache = self.owner_cache.write();
-            for user in users {
+            for user in users.clone() {
                 owner_cache.put((user, vc.id), ());
             }
 
@@ -211,7 +225,19 @@ impl EventHandler for Bot {
                     // If it's not empty, it'll get cleaned later.
                 }
                 *queue.push_back() = (cat.id, vc.id, txt.map(|c| c.id));
+            } else {
+                // If we moved them just fine, check if we should move everyone else they've added
+                // The users iterator includes the owner but this should be a fine no-op.
+                let role_cache = self.role_cache.read();
+                if message.member.unwrap().roles.iter().any(|r| role_cache.contains(r)) {
+                    for user in users.clone() {
+                        // Dump the result, we don't actually care if they succeeded.
+                        let _ = guild.move_member(&ctx, user, vc.id);
+                    }
+                }
+
             };
+
         }
     }
 
@@ -304,7 +330,13 @@ impl EventHandler for Bot {
         let mut category_cache = self.category_cache.write();
         let mut voice_map = self.voice_channels.write(); // User channel tracker (for decrement)
         let mut counts = self.voice_counts.write(); // User channel counts
+        let mut role_cache = self.role_cache.write();
         for guild in guilds {
+            // Update the role cache
+            for (.., role) in guild.roles {
+                Self::update_role_raw(&mut role_cache, role);
+            }
+
             // This code is copy-pasted
             // Please refactor.
             let mut category_map = HashMap::new();
@@ -371,6 +403,27 @@ impl EventHandler for Bot {
         // Despite this, it has the custom activity type
         // This is fucking stupid.
     }
+
+    fn guild_role_create(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
+        if role.permissions.move_members() {
+            self.role_cache.write().insert(role.id)
+        }
+    }
+
+    fn guild_role_delete(&self, _ctx: Context, _guild_id: GuildId, role: RoleId) {
+        self.role_cache.write().remove(&role);
+    }
+
+    fn guild_role_update(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
+        self.update_role(role)
+    }
+
+    fn guild_create(&self, _ctx: Context, guild: Guild) {
+        let mut role_cache = self.role_cache.write();
+        for (.., role) in guild.roles {
+            Self::update_role_raw(&mut role_cache, role);
+        }
+    }
 }
 
 struct BotEventsDelegator(Arc<Bot>);
@@ -381,6 +434,10 @@ impl EventHandler for BotEventsDelegator {
             fn message(&self, ctx: Context, message: Message);
             fn voice_state_update(&self, ctx: Context, guild: Option<GuildId>, voice: VoiceState);
             fn ready(&self, ctx: Context, _ready: Ready);
+            fn guild_role_create(&self, ctx: Context, guild: GuildId, role: Role);
+            fn guild_role_delete(&self, ctx: Context, guild: GuildId, role: RoleId);
+            fn guild_role_update(&self, ctx: Context, guild: GuildId, role: Role);
+            fn guild_create(&self, ctx: Context, guild: Guild);
         }
     }
 }
@@ -405,6 +462,7 @@ fn main() {
         category_cache: RwLock::new(CategoryCache::new(32)),
         ignore_cache: RwLock::new(LruCache::new(128)),
         owner_cache: RwLock::new(LruCache::new(128)),
+        role_cache: RwLock::new(BTreeSet::new()),
     });
 
     let mut token = std::env::args().nth(1).expect("No token supplied");
