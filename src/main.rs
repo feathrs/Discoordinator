@@ -86,11 +86,11 @@ impl Bot {
         }
     }
 
-    fn update_role(&self, role: Role) {
+    fn update_role(&self, role: &Role) {
         Self::update_role_raw(&mut self.role_cache.write(), role);
     }
 
-    fn update_role_raw(role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, role: Role) {
+    fn update_role_raw(role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, role: &Role) {
         if role.permissions.move_members() {
             role_cache.insert(role.id);
         } else {
@@ -333,7 +333,7 @@ impl EventHandler for Bot {
         let mut role_cache = self.role_cache.write();
         for guild in guilds {
             // Update the role cache
-            for (.., role) in guild.roles {
+            for (.., role) in &guild.roles {
                 Self::update_role_raw(&mut role_cache, role);
             }
 
@@ -406,7 +406,7 @@ impl EventHandler for Bot {
 
     fn guild_role_create(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
         if role.permissions.move_members() {
-            self.role_cache.write().insert(role.id)
+            self.role_cache.write().insert(role.id);
         }
     }
 
@@ -415,13 +415,13 @@ impl EventHandler for Bot {
     }
 
     fn guild_role_update(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
-        self.update_role(role)
+        self.update_role(&role);
     }
 
     fn guild_create(&self, _ctx: Context, guild: Guild) {
         let mut role_cache = self.role_cache.write();
         for (.., role) in guild.roles {
-            Self::update_role_raw(&mut role_cache, role);
+            Self::update_role_raw(&mut role_cache, &role);
         }
     }
 }
