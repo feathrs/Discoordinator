@@ -122,7 +122,11 @@ impl EventHandler for Bot {
                     format!("{}{}", PARTY_PREFIX, message.id)
                 } else {
                     // It's not a user, so they probably intended to set the name
-                    format!("{}{}", PARTY_PREFIX, &name[..std::cmp::min(20, name.len())])
+                    format!("{}{}", PARTY_PREFIX, name.chars().take(20).collect::<String>())
+                    // I'm not entirely sure why - As far as I'm aware - Rust doesn't provide a way
+                    // to get the char at a byte offset, given that it can just walk back until
+                    // is_char_boundary(i). Then I can just slice up to there and I don't have
+                    // iterate, collect, and copy.
                 }
             } else {
                 format!("{}{}", PARTY_PREFIX, message.id)
