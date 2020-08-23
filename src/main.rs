@@ -39,7 +39,7 @@ struct Bot {
     // category cache is actually vc -> category + txt
     ignore_cache: RwLock<LruCache<ChannelId, ()>>,
     owner_cache: RwLock<LruCache<(UserId, ChannelId), ()>>, // owner cache is just me being lazy about party owner checks
-    role_cache: RwLock<BTreeSet<RoleId>>, // to identify if user has perms to move user
+    move_role_cache: RwLock<BTreeSet<RoleId>>, // to identify if user has perms to move user
     // god forbid should two servers have two roles with identical ids
     guild_owner_cache: RwLock<BTreeMap<GuildId, UserId>>, // Owner always has Administrator perms
 }
@@ -88,7 +88,7 @@ impl Bot {
     }
 
     fn update_role(&self, role: &Role) {
-        Self::update_role_raw(&mut self.role_cache.write(), role);
+        Self::update_role_raw(&mut self.move_role_cache.write(), role);
     }
 
     fn update_role_raw(role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, role: &Role) {
@@ -230,7 +230,7 @@ impl EventHandler for Bot {
             } else {
                 // If we moved them just fine, check if we should move everyone else they've added
                 // The users iterator includes the owner but this should be a fine no-op.
-                let role_cache = self.role_cache.read();
+                let role_cache = self.move_role_cache.read();
                 if message.member.unwrap().roles.iter().any(|r| role_cache.contains(r))
                     || self.guild_owner_cache.read().get(&guild) == Some(&message.author.id)
                 {
@@ -334,7 +334,7 @@ impl EventHandler for Bot {
         let mut category_cache = self.category_cache.write();
         let mut voice_map = self.voice_channels.write(); // User channel tracker (for decrement)
         let mut counts = self.voice_counts.write(); // User channel counts
-        let mut role_cache = self.role_cache.write();
+        let mut role_cache = self.move_role_cache.write();
         let mut guild_owner_cache = self.guild_owner_cache.write();
         for guild in guilds {
             // Update the role cache
@@ -414,12 +414,12 @@ impl EventHandler for Bot {
 
     fn guild_role_create(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
         if role.permissions.move_members() || role.permissions.administrator() {
-            self.role_cache.write().insert(role.id);
+            self.move_role_cache.write().insert(role.id);
         }
     }
 
     fn guild_role_delete(&self, _ctx: Context, _guild_id: GuildId, role: RoleId) {
-        self.role_cache.write().remove(&role);
+        self.move_role_cache.write().remove(&role);
     }
 
     fn guild_role_update(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
@@ -427,7 +427,7 @@ impl EventHandler for Bot {
     }
 
     fn guild_create(&self, _ctx: Context, guild: Guild) {
-        let mut role_cache = self.role_cache.write();
+        let mut role_cache = self.move_role_cache.write();
         for (.., role) in guild.roles {
             Self::update_role_raw(&mut role_cache, &role);
         }
@@ -471,7 +471,7 @@ fn main() {
         category_cache: RwLock::new(CategoryCache::new(32)),
         ignore_cache: RwLock::new(LruCache::new(128)),
         owner_cache: RwLock::new(LruCache::new(128)),
-        role_cache: RwLock::new(BTreeSet::new()),
+        move_role_cache: RwLock::new(BTreeSet::new()),
         guild_owner_cache: RwLock::new(BTreeMap::new())
     });
 
