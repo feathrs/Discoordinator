@@ -271,9 +271,10 @@ impl EventHandler for Bot {
                             let _ = chan.delete(&ctx);
                         }
                         let _ = chans.0.delete(&ctx);
+
                     } else {
                         eprintln!("Failed to get channels after cache reload for {:?}", guild);
-                        // This could be an ignored channel
+                        // This could be an ignored channel: i.e. it's not managed by the bot
                         // If this keeps happening, look at updating the ignore
                         // cache at the same time. If it keeps happening then,
                         // look at dynamically scaling the cache when it happens.
