@@ -153,22 +153,22 @@ impl EventHandler for Bot {
                 return;
             }
             let args = args.unwrap();
-            let name = if let Some(name) = args.kwargs.get("name") {
-                format!("{}{}", PARTY_PREFIX, &name[..std::cmp::min(20, name.len())])
+            let name_part = if let Some(name) = args.kwargs.get("name") {
+                name.chars().take(20).collect::<String>()
             } else if let Some(name) = args.args.get(0) {
                 if name.parse::<UserId>().is_ok() {
                     // It's actually a user, so just give it a default name
-                    format!("{}{}", PARTY_PREFIX, message.id)
+                    message.id.to_string()
                 } else {
                     // It's not a user, so they probably intended to set the name
-                    format!("{}{}", PARTY_PREFIX, name.chars().take(20).collect::<String>())
+                    name.chars().take(20).collect::<String>()
                     // I'm not entirely sure why - As far as I'm aware - Rust doesn't provide a way
                     // to get the char at a byte offset, given that it can just walk back until
                     // is_char_boundary(i). Then I can just slice up to there and I don't have
                     // iterate, collect, and copy.
                 }
             } else {
-                format!("{}{}", PARTY_PREFIX, message.id)
+                message.id.to_string()
             };
             // Set up the initial permissions
             let listed_users = args
@@ -193,7 +193,7 @@ impl EventHandler for Bot {
 
             // Create a category
             let cat = guild.create_channel(&ctx, |c| {
-                c.name(name)
+                c.name(format!("{}{}", PARTY_PREFIX, &name_part))
                     .permissions(initial_user_perms.clone())
                     .kind(ChannelType::Category)
                     .position(200)
@@ -205,7 +205,7 @@ impl EventHandler for Bot {
 
             // Create the channels
             let vc = guild.create_channel(&ctx, |c| {
-                c.name(format!("Party {}", cat.id.0))
+                c.name(format!("Party: {}", name_part))
                     .position(200)
                     //.permissions(initial_user_perms.clone())
                     .kind(ChannelType::Voice)
@@ -223,7 +223,7 @@ impl EventHandler for Bot {
 
             let txt = guild
                 .create_channel(&ctx, |c| {
-                    c.name(format!("party-{}", cat.id.0))
+                    c.name(format!("party-{}", name_part))
                         .position(200)
                         .kind(ChannelType::Text)
                         //.permissions(initial_user_perms)
