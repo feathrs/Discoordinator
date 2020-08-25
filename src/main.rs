@@ -4,6 +4,7 @@ extern crate cmd;
 extern crate lru;
 extern crate parking_lot;
 extern crate serenity;
+extern crate bimap;
 
 use crossbeam::scope;
 use fixed_vec_deque::FixedVecDeque;
@@ -15,8 +16,9 @@ use serenity::prelude::*;
 use std::collections::{BTreeMap, HashMap, BTreeSet};
 use std::sync::Arc;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use cmd::Args;
+use bimap::BiBTreeMap;
 
 type CategoryCache = LruCache<ChannelId, (ChannelId, Option<ChannelId>)>;
 type CleanupQueue = FixedVecDeque<[(ChannelId, ChannelId, Option<ChannelId>); 32]>;
@@ -38,10 +40,16 @@ struct Bot {
     category_cache: RwLock<CategoryCache>,
     // category cache is actually vc -> category + txt
     ignore_cache: RwLock<LruCache<ChannelId, ()>>,
-    owner_cache: RwLock<LruCache<(UserId, ChannelId), ()>>, // owner cache is just me being lazy about party owner checks
+    owner_cache: RwLock<BiBTreeMap<ChannelId, (UserId, GuildId)>>,
+    // I'm assuming that ChannelId has implied independent domain to GuildId.
     move_role_cache: RwLock<BTreeSet<RoleId>>, // to identify if user has perms to move user
+    create_chan_role_cache: RwLock<BTreeSet<RoleId>>, // to identify if user has perms to create channel
     // god forbid should two servers have two roles with identical ids
     guild_owner_cache: RwLock<BTreeMap<GuildId, UserId>>, // Owner always has Administrator perms
+    whitelist_role_cache: RwLock<BTreeMap<GuildId, RoleId>>,
+    ratelimit_cache: RwLock<LruCache<UserId, Instant>>
+    // May use (UserId, GuildId) keying instead if people find there is a legitimate need to create
+    // multiple parties across guilds within the ratelimit.
 }
 
 impl Bot {
@@ -88,14 +96,19 @@ impl Bot {
     }
 
     fn update_role(&self, role: &Role) {
-        Self::update_role_raw(&mut self.move_role_cache.write(), role);
+        Self::update_role_raw(&mut self.move_role_cache.write(), &mut self.create_chan_role_cache.write(), role);
     }
 
-    fn update_role_raw(role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, role: &Role) {
+    fn update_role_raw(move_role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, create_chan_role_cache: &mut RwLockWriteGuard<BTreeSet<RoleId>>, role: &Role) {
         if role.permissions.move_members() || role.permissions.administrator() {
-            role_cache.insert(role.id);
+            move_role_cache.insert(role.id);
         } else {
-            role_cache.remove(&role.id);
+            move_role_cache.remove(&role.id);
+        }
+        if role.permissions.manage_channels() || role.permissions.administrator() {
+            create_chan_role_cache.insert(role.id);
+        } else {
+            create_chan_role_cache.remove(&role.id);
         }
     }
 }
@@ -108,6 +121,35 @@ impl EventHandler for Bot {
         }
         let guild = message.guild_id.unwrap();
         if message.content.starts_with("/party") {
+            let now = Instant::now();
+            let since = self.ratelimit_cache.read().peek(&message.author.id)
+                .map(|&last| now.duration_since(last))
+                .unwrap_or_else(|| Duration::from_secs(301));
+            if since < Duration::from_secs(20) {
+                // This is both for the bot's sake and to prevent nuisance abuse of the bot
+                println!("<20");
+                return;
+            } else if self.owner_cache.read().contains_right(&(message.author.id, guild)) {
+                println!("exist");
+                let _ = message.reply(&ctx, "You already have a party! Disband it first.");
+                self.ratelimit_cache.write().put(message.author.id, now);
+                return;
+            } else if since < Duration::from_secs(300) {
+                println!("<300");
+                let _ = message.reply(&ctx, format!("You're making parties too fast! Wait another {} seconds", 300-since.as_secs()));
+                return;
+            }
+            self.ratelimit_cache.write().put(message.author.id, Instant::now());
+            if let Some(&role_id) = self.whitelist_role_cache.read().get(&guild) {
+                let member = message.member.as_ref().unwrap();
+                let chan_role_cache = self.create_chan_role_cache.read();
+                if !(member.roles.iter().any(|r| *r == role_id || chan_role_cache.contains(r))
+                    || self.guild_owner_cache.read().get(&guild) == Some(&message.author.id))  {
+                    // This needs rate-limiting too or people will be extremely funny.
+                    let _ = message.reply(&ctx, "You do not have permission to use this command");
+                    return;
+                }
+            }
             let args = Args::parse(&message.content[6..]);
             if args.is_err() {
                 let _ = message.reply(ctx, "Failed to parse command!");
@@ -180,10 +222,7 @@ impl EventHandler for Bot {
                 }
                 return;
             };
-            let mut owner_cache = self.owner_cache.write();
-            for user in users.clone() {
-                owner_cache.put((user, vc.id), ());
-            }
+            self.owner_cache.write().insert(vc.id, (message.author.id, guild));
 
             let txt = guild
                 .create_channel(&ctx, |c| {
@@ -223,6 +262,8 @@ impl EventHandler for Bot {
                         // was above. NLL or something good like that. If not I
                         // can manually drop(map) anyway.
                         self.voice_counts.write().remove(&old.0);
+                        // Also clean the owner cache for the channel
+                        self.owner_cache.write().remove_by_left(&old.1);
                     }
                     // If it's not empty, it'll get cleaned later.
                 }
@@ -271,7 +312,7 @@ impl EventHandler for Bot {
                             let _ = chan.delete(&ctx);
                         }
                         let _ = chans.0.delete(&ctx);
-
+                        self.owner_cache.write().remove_by_left(&old_channel);
                     } else {
                         eprintln!("Failed to get channels after cache reload for {:?}", guild);
                         // This could be an ignored channel: i.e. it's not managed by the bot
@@ -304,9 +345,13 @@ impl EventHandler for Bot {
             member_map.insert(voice.user_id, chan);
             *count_map.entry(chan).or_insert(0) += 1;
 
-            let mut owner_cache = self.owner_cache.write();
-            if owner_cache.get(&(voice.user_id, chan)).is_some() {
-                // The user is an owner of this channel. They already have perms
+            let owner_cache = self.owner_cache.read();
+            if owner_cache.get_by_left(&chan) == Some(&(voice.user_id, guild)) { // .contains does not update LRU
+                // The user is an owner of this channel. They already have perms.
+                // Also I updated the way channel owners work so this is now slightly broken and
+                // doesn't maintain the permissions for the initial users. I need to either fix that
+                // or change the semantics of the initial user permissions.
+                // TODO: Check and manage owners properly now the semantics of owner_cache has changed.
                 return;
             }
 
@@ -335,12 +380,20 @@ impl EventHandler for Bot {
         let mut category_cache = self.category_cache.write();
         let mut voice_map = self.voice_channels.write(); // User channel tracker (for decrement)
         let mut counts = self.voice_counts.write(); // User channel counts
-        let mut role_cache = self.move_role_cache.write();
+        let mut move_role_cache = self.move_role_cache.write();
+        let mut create_chan_role_cache = self.create_chan_role_cache.write();
         let mut guild_owner_cache = self.guild_owner_cache.write();
+        let mut whitelist_cache = self.whitelist_role_cache.write();
         for guild in guilds {
-            // Update the role cache
+            // Update the role caches
             for (.., role) in &guild.roles {
-                Self::update_role_raw(&mut role_cache, role);
+                Self::update_role_raw(&mut move_role_cache, &mut create_chan_role_cache, role);
+                if role.name.starts_with("+#") && whitelist_cache.insert(guild.id, role.id).is_some() {
+                    eprintln!("{:?} has multiple '+#' roles", guild.id)
+                    // In the event that they have multiple I'll need to sort out something smarter.
+                    // I'm leaving this here has acknowledgement of that fact, giving me a way to
+                    // defer implementing a smarter solution to a time that it is required.
+                }
             }
 
             // Update guild-owner cache
@@ -413,24 +466,38 @@ impl EventHandler for Bot {
         // This is fucking stupid.
     }
 
-    fn guild_role_create(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
+    fn guild_role_create(&self, _ctx: Context, guild_id: GuildId, role: Role) {
         if role.permissions.move_members() || role.permissions.administrator() {
             self.move_role_cache.write().insert(role.id);
         }
+        if role.name.starts_with("+#") {
+            self.whitelist_role_cache.write().insert(guild_id, role.id);
+        }
     }
 
-    fn guild_role_delete(&self, _ctx: Context, _guild_id: GuildId, role: RoleId) {
+    fn guild_role_delete(&self, _ctx: Context, guild_id: GuildId, role: RoleId) {
         self.move_role_cache.write().remove(&role);
+        let mut whitelist_cache = self.whitelist_role_cache.write();
+        if whitelist_cache.get(&guild_id) == Some(&role) {
+            whitelist_cache.remove(&guild_id);
+        }
     }
 
-    fn guild_role_update(&self, _ctx: Context, _guild_id: GuildId, role: Role) {
+    fn guild_role_update(&self, _ctx: Context, guild_id: GuildId, role: Role) {
         self.update_role(&role);
+        let mut whitelist_cache = self.whitelist_role_cache.write();
+        if role.name.starts_with("+#") {
+            whitelist_cache.insert(guild_id, role.id);
+        } else if whitelist_cache.get(&guild_id) == Some(&role.id) {
+            whitelist_cache.remove(&guild_id);
+        }
     }
 
     fn guild_create(&self, _ctx: Context, guild: Guild) {
         let mut role_cache = self.move_role_cache.write();
+        let mut chan_role_cache = self.create_chan_role_cache.write();
         for (.., role) in guild.roles {
-            Self::update_role_raw(&mut role_cache, &role);
+            Self::update_role_raw(&mut role_cache, &mut chan_role_cache, &role);
         }
         self.guild_owner_cache.write().insert(guild.id, guild.owner_id);
     }
@@ -467,13 +534,16 @@ fn main() {
         perms_member,
         perms_creator,
         cleanup_queue: RwLock::new(FixedVecDeque::new()),
-        voice_counts: RwLock::new(BTreeMap::new()),
-        voice_channels: RwLock::new(BTreeMap::new()),
+        voice_counts: Default::default(),
+        voice_channels: Default::default(),
         category_cache: RwLock::new(CategoryCache::new(32)),
         ignore_cache: RwLock::new(LruCache::new(128)),
-        owner_cache: RwLock::new(LruCache::new(128)),
-        move_role_cache: RwLock::new(BTreeSet::new()),
-        guild_owner_cache: RwLock::new(BTreeMap::new())
+        owner_cache: Default::default(),
+        ratelimit_cache: RwLock::new(LruCache::new(128)),
+        move_role_cache: Default::default(),
+        create_chan_role_cache: Default::default(),
+        guild_owner_cache: Default::default(),
+        whitelist_role_cache: Default::default(),
     });
 
     let mut token = std::env::args().nth(1).expect("No token supplied");
@@ -510,6 +580,8 @@ fn main() {
                             let _ = tail.1.delete(&http_client);
                             let _ = tail.0.delete(&http_client);
                         }
+                        // Clear the owner cache
+                        bot.owner_cache.write().remove_by_left(&tail.1);
                     } else {
                         println!("Setting it as the last used.");
                         last = tail.0;

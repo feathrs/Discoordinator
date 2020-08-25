@@ -12,6 +12,7 @@ fixed-vec-deque = "0.1"
 parking_lot = "0.10"
 crossbeam = "0.7"
 delegate = "0.4"
+bimap = "0.5"
 
 [dependencies.cmd]
 git = "https://github.com/eLunate/cmd-rs.git"
