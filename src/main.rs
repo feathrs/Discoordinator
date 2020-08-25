@@ -214,11 +214,11 @@ impl EventHandler for Bot {
                     // If it's empty, tidy it
                     let count = self.voice_counts.read().get(&old.0).copied().unwrap_or(0);
                     if count == 0 {
-                        let _ = vc.delete(&ctx);
-                        if let Some(ref txt) = txt {
+                        let _ = old.1.delete(&ctx);
+                        if let Some(ref txt) = old.2 {
                             let _ = txt.delete(&ctx);
                         }
-                        let _ = cat.delete(&ctx);
+                        let _ = old.1.delete(&ctx);
                         // This should work because the last use of the read lock
                         // was above. NLL or something good like that. If not I
                         // can manually drop(map) anyway.
