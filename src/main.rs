@@ -127,15 +127,12 @@ impl EventHandler for Bot {
                 .unwrap_or_else(|| Duration::from_secs(301));
             if since < Duration::from_secs(20) {
                 // This is both for the bot's sake and to prevent nuisance abuse of the bot
-                println!("<20");
                 return;
             } else if self.owner_cache.read().contains_right(&(message.author.id, guild)) {
-                println!("exist");
                 let _ = message.reply(&ctx, "You already have a party! Disband it first.");
                 self.ratelimit_cache.write().put(message.author.id, now);
                 return;
             } else if since < Duration::from_secs(300) {
-                println!("<300");
                 let _ = message.reply(&ctx, format!("You're making parties too fast! Wait another {} seconds", 300-since.as_secs()));
                 return;
             }
